@@ -1,4 +1,4 @@
-package td
+package td // import "go.oneofone.dev/td"
 
 import (
 	"bytes"
