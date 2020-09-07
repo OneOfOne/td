@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/OneOfOne/any"
+	"go.oneofone.dev/anyx"
 )
 
 type OptionChain struct {
@@ -245,8 +245,8 @@ func (c *Client) OptionChain(ctx context.Context, symbol string, params *OptionC
 	args := url.Values{}
 	args.Set("symbol", symbol)
 	if params != nil {
-		pa := any.Value(params)
-		pa.ForEach(func(key any.A, value any.Any) (exit bool) {
+		pa := anyx.Value(params)
+		pa.ForEach(func(key anyx.A, value anyx.Any) (exit bool) {
 			k := key.(string)
 			k = strings.ToLower(k[:1]) + k[1:]
 			args.Set(k, value.String(true))

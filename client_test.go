@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/OneOfOne/otk"
 	"github.com/joho/godotenv"
@@ -21,7 +22,7 @@ var (
 
 func init() {
 	log.SetFlags(log.Lshortfile)
-	err := godotenv.Load("../.env")
+	err := godotenv.Load(".env")
 	if err != nil {
 		log.Fatal("Error loading .env file")
 	}
@@ -54,21 +55,37 @@ func Test(t *testing.T) {
 	// checkAndPrint(t, a, err)
 	// o, err := c.Orders(ctx, accountID, 0, "", "", "")
 	// checkAndPrint(t, o, err)
-	oc, err := c.OptionChain(ctx, "AMD", &OptionChainParams{
-		IncludeQuotes: true,
-		StrikeCount:   4,
-		ExpMonth:      "AUG",
-	})
-	checkAndPrint(t, oc, err)
+	// oc, err := c.OptionChain(ctx, "AMD", &OptionChainParams{
+	// 	IncludeQuotes: true,
+	// 	StrikeCount:   4,
+	// 	ExpMonth:      "AUG",
+	// })
+	// checkAndPrint(t, oc, err)
 	// oc, err = c.OptionChain(ctx, "AMD", "strikeCount", "4")
 	// checkAndPrint(t, oc, err)
-	// s, err := c.Streamer(ctx)
-	// defer s.Close()
-	// checkAndPrint(t, nil, err)
-	// err = s.SetQoS(ctx, 0)
-	// checkAndPrint(t, nil, err)
-	// ch, _ := s.AccountActivity(ctx)
-	// t.Log(<-ch)
+	s, err := c.Streamer(ctx, 0)
+	checkAndPrint(t, nil, err)
+	defer s.Close()
+
+	ch, err := s.Subscribe(ctx, "QUOTE", StreamRequestParams{Keys: "QQQ,SPY", Fields: "0,1,2,3,4,5,6,7"})
+	checkAndPrint(t, nil, err)
+	t.Log(<-ch)
+	t.Log(<-ch)
+	t.Log(<-ch)
+	ch, err = s.Chart(ctx, EquityChart, "QQQ", "SPY")
+	checkAndPrint(t, nil, err)
+	ts := time.Now()
+	ach, _ := s.AccountActivity(ctx)
+	for i := 0; i < 3; i++ {
+		select {
+		case v := <-ach:
+			t.Log(time.Since(ts), v)
+		case v := <-ch:
+			t.Log(time.Since(ts), v.Get("7").Time("U").UTC(), v)
+		}
+		ts = time.Now()
+	}
+
 	// t.Log(s.Unsubcribe(ctx, "ACC_ACTIVITY"))
 	// t.Log(<-ch)
 	// os, err := c.Orders(ctx, "", 0, "", "", "")
@@ -84,6 +101,9 @@ func checkAndPrint(tb testing.TB, i interface{}, err error) {
 	tb.Helper()
 	if err != nil {
 		tb.Fatal(err)
+	}
+	if i == nil {
+		return
 	}
 	j, _ := json.MarshalIndent(i, "", "  ")
 	tb.Logf("%s", j)

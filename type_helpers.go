@@ -3,12 +3,13 @@ package td
 import (
 	"encoding/json"
 	"log"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
-)
 
-type AnyMap = map[string]Any
+	"go.oneofone.dev/anyx"
+)
 
 var nytz *time.Location
 
@@ -19,6 +20,8 @@ func init() {
 		nytz = time.Local
 	}
 }
+
+func NewYorkTZ() *time.Location { return nytz }
 
 const DateTimeFormat = `2006-01-02T15:04:05+0000`
 
@@ -78,5 +81,20 @@ func BoolVal(src *bool, def bool) *bool {
 
 func marshalAny(v Any) (b []byte) {
 	b, _ = json.Marshal(v)
+	return
+}
+
+func valToURL(v anyx.A) (u url.Values) {
+	if v == nil {
+		return
+	}
+
+	anyx.Value(v).ForEach(func(key anyx.A, value anyx.Any) (exit bool) {
+		if u == nil {
+			u = url.Values{}
+		}
+		u.Set(key.(string), value.String(true))
+		return
+	})
 	return
 }

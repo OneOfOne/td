@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -12,7 +13,14 @@ import (
 	"golang.org/x/xerrors"
 )
 
-func (c *Client) Streamer(ctx context.Context) (s *Streamer, err error) {
+func (c *Client) Streamer(ctx context.Context, qos int) (s *Streamer, err error) {
+	type loginReq struct {
+		Credential string `json:"credential"`
+		Token      string `json:"token"`
+		Version    string `json:"version"`
+		QOSLevel   int    `json:"qosLevel"`
+	}
+
 	var up *UserPrincipal
 	if up, err = c.UserPrincipals(ctx, AllUserPrincipalFields); err != nil {
 		return
@@ -59,10 +67,11 @@ func (c *Client) Streamer(ctx context.Context) (s *Streamer, err error) {
 
 	go s.loop()
 
-	err = s.sendRequest(ctx, "ADMIN", "LOGIN", AnyMap{
-		"credential": creds.Encode(),
-		"token":      si.Token,
-		"version":    "1.0",
+	err = s.sendRequest(ctx, "ADMIN", "LOGIN", loginReq{
+		Credential: creds.Encode(),
+		Token:      si.Token,
+		Version:    "1.0",
+		QOSLevel:   qos,
 	})
 
 	return
@@ -77,28 +86,54 @@ type Streamer struct {
 	reqID int64
 	m     sync.Map
 
-	OnData     func(data []AnyMap)
+	OnData     func(data []Any)
 	OnResponse func(code int, message string)
 }
 
 func (s *Streamer) SetQoS(ctx context.Context, qos int) error {
+	type qosReq struct {
+		QOSLevel int `json:"qoslevel"`
+	}
 	if qos < 0 || qos > 5 {
 		return xerrors.Errorf("%d is out of range, the range is 0 to 5", qos)
 	}
-	return s.sendRequest(ctx, "ADMIN", "QOS", AnyMap{"qoslevel": strconv.Itoa(qos)})
+	return s.sendRequest(ctx, "ADMIN", "QOS", qosReq{qos})
 }
 
-func (s *Streamer) AccountActivity(ctx context.Context) (<-chan AnyMap, error) {
+type StreamRequestParams struct {
+	Keys   string `json:"keys"`
+	Fields string `json:"fields"`
+}
+
+func (s *Streamer) AccountActivity(ctx context.Context) (<-chan Any, error) {
 	const svc = "ACCT_ACTIVITY"
-	return s.Subscribe(ctx, svc, AnyMap{"keys": s.key, "fields": "0,1,2,3"})
+	const fields = "0,1,2,3"
+
+	return s.Subscribe(ctx, svc, StreamRequestParams{Keys: s.key, Fields: fields})
 }
 
-func (s *Streamer) Subscribe(ctx context.Context, svc string, params AnyMap) (<-chan AnyMap, error) {
-	v, _ := s.m.LoadOrStore(svc, make(chan AnyMap, 256))
+type ChartType string
+
+const (
+	EquityChart  ChartType = "CHART_EQUITY"
+	FuturesChart ChartType = "CHART_FUTURES"
+	OptionsChart ChartType = "CHART_OPTIONS"
+)
+
+func (s *Streamer) Chart(ctx context.Context, chartType ChartType, symbols ...string) (<-chan Any, error) {
+	const allFields = "0,1,2,3,4,5,6,7"
+	return s.Subscribe(ctx, string(chartType), StreamRequestParams{
+		Keys:   strings.Join(symbols, ","),
+		Fields: allFields,
+	})
+}
+
+func (s *Streamer) Subscribe(ctx context.Context, svc string, params StreamRequestParams) (<-chan Any, error) {
+	v, _ := s.m.LoadOrStore(svc, make(chan Any, 256))
 	if err := s.sendRequest(ctx, svc, "SUBS", params); err != nil {
 		return nil, err
 	}
-	ch := v.(chan AnyMap)
+	ch := v.(chan Any)
 	return ch, nil
 }
 
@@ -106,7 +141,7 @@ func (s *Streamer) Subscribe(ctx context.Context, svc string, params AnyMap) (<-
 // the UNSUBS command, which fails because, well reasons...
 func (s *Streamer) Unsubcribe(ctx context.Context, svc string) error {
 	ch, _ := s.m.LoadAndDelete(svc)
-	if ch, ok := ch.(chan AnyMap); ok {
+	if ch, ok := ch.(chan Any); ok {
 		close(ch)
 	}
 
@@ -127,6 +162,8 @@ func (s *Streamer) loop() {
 		if err := s.conn.ReadJSON(&sr); err != nil {
 			break
 		}
+		// j, _ := json.Marshal(&sr)
+		// log.Printf("%s", j)
 
 		for _, r := range sr.Response {
 			if v, ok := s.m.Load(r.RequestID); ok {
@@ -145,7 +182,7 @@ func (s *Streamer) loop() {
 		for _, d := range sr.Data {
 			if d.Service != "" {
 				if v, ok := s.m.Load(d.Service); ok {
-					if ch, ok := v.(chan AnyMap); ok {
+					if ch, ok := v.(chan Any); ok {
 						for _, c := range d.Content {
 							ch <- c
 						}
@@ -160,7 +197,7 @@ func (s *Streamer) loop() {
 	}
 }
 
-func (s *Streamer) makeRequest(service, cmd string, params AnyMap) (*streamRequests, string) {
+func (s *Streamer) makeRequest(service, cmd string, params interface{}) (*streamRequests, string) {
 	id := strconv.FormatInt(atomic.AddInt64(&s.reqID, 1), 10)
 	return &streamRequests{
 		Requests: []streamRequest{
@@ -176,7 +213,7 @@ func (s *Streamer) makeRequest(service, cmd string, params AnyMap) (*streamReque
 	}, id
 }
 
-func (s *Streamer) sendRequest(ctx context.Context, service, cmd string, params AnyMap) (err error) {
+func (s *Streamer) sendRequest(ctx context.Context, service, cmd string, params interface{}) (err error) {
 	req, id := s.makeRequest(service, cmd, params)
 	ch := make(chan *streamDataResponse, 1)
 	s.mux.Lock()
@@ -203,12 +240,12 @@ type streamRequests struct {
 }
 
 type streamRequest struct {
-	Service    string `json:"service"`
-	RequestID  string `json:"requestid"`
-	Command    string `json:"command"`
-	Account    string `json:"account"`
-	Source     string `json:"source"`
-	Parameters AnyMap `json:"parameters"`
+	Service    string      `json:"service"`
+	RequestID  string      `json:"requestid"`
+	Command    string      `json:"command"`
+	Account    string      `json:"account"`
+	Source     string      `json:"source"`
+	Parameters interface{} `json:"parameters"`
 }
 
 type streamResponse struct {
@@ -236,5 +273,5 @@ type streamDataResponse struct {
 
 type streamSubResponse struct {
 	streamResponseBase
-	Content []AnyMap `json:"content,omitempty"`
+	Content []Any `json:"content,omitempty"`
 }

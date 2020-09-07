@@ -2,6 +2,10 @@ package td
 
 import (
 	"context"
+	"log"
+	"net/url"
+	"strconv"
+	"time"
 )
 
 type PeriodType string
@@ -58,14 +62,46 @@ type HistoryParams struct {
 	Frequency int `json:"frequency,omitempty"`
 
 	// End date as milliseconds since epoch. If startDate and endDate are provided, period should not be provided. Default is previous trading day.
-	StartDate int64 `json:"startDate,omitempty"`
+	StartDate time.Time `json:"startDate,omitempty"`
 
 	// Start date as milliseconds since epoch. If startDate and endDate are provided, period should not be provided.
-	EndDate int64 `json:"endDate,omitempty"`
+	EndDate time.Time `json:"endDate,omitempty"`
 
 	// true to return extended hours data, false for regular market hours only. Default is true
 	// use Bool to easily return a pointer
 	NeedExtendedHoursData *bool `json:"needExtendedHoursData,omitempty"`
+}
+
+func (p *HistoryParams) Query() string {
+	if p == nil {
+		return ""
+	}
+	u := url.Values{}
+	if p.PeriodType != "" {
+		u.Set("periodType", string(p.PeriodType))
+	}
+	if p.Period != 0 {
+		u.Set("period", strconv.Itoa(p.Period))
+	}
+	if p.FrequencyType != "" {
+		u.Set("frequencyType", string(p.FrequencyType))
+	}
+
+	if p.Frequency != 0 {
+		u.Set("frequency", strconv.Itoa(p.Frequency))
+	}
+
+	if !p.StartDate.IsZero() {
+		u.Set("startDate", strconv.FormatInt(p.StartDate.Unix()*1000, 10))
+	}
+
+	if !p.EndDate.IsZero() {
+		u.Set("endDate", strconv.FormatInt(p.EndDate.Unix()*1000, 10))
+	}
+
+	u.Set("needExtendedHoursData", strconv.FormatBool(p.NeedExtendedHoursData == nil || *p.NeedExtendedHoursData))
+	log.Println(u)
+	return u.Encode()
 }
 
 type Candle struct {
@@ -77,14 +113,20 @@ type Candle struct {
 	Datetime DateTime `json:"datetime,omitempty"`
 }
 
-func (c *Client) PriceHistory(ctx context.Context, symbol string, params *HistoryParams) (_ []Candle, err error) {
-	if params != nil {
-		params.NeedExtendedHoursData = BoolVal(params.NeedExtendedHoursData, true)
-	}
-
+func (c *Client) PriceHistory(ctx context.Context, symbol string, params *HistoryParams) (_ Candles, err error) {
 	var out struct {
-		Candles []Candle `json:"candles,omitempty"`
+		Candles Candles `json:"candles,omitempty"`
 	}
-	err = c.Request(ctx, "GET", "marketdata/"+symbol+"/pricehistory", nil, &out)
+	err = c.Request(ctx, "GET", "marketdata/"+symbol+"/pricehistory?"+params.Query(), nil, &out)
 	return out.Candles, err
+}
+
+type Candles []Candle
+
+func (c Candles) GroupByClose() []float64 {
+	out := make([]float64, len(c))
+	for i := range c {
+		out[i] = c[i].Close
+	}
+	return out
 }
